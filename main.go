@@ -69,7 +69,6 @@ var (
 		"listmovie":    listMovies,
 		"addmovie":     addMovie,
 		"extractmovie": extractMovie,
-		"closepoll":    closePoll,
 		"setup":        setupBot,
 	}
 
