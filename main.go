@@ -219,7 +219,7 @@ func extractMovie(event *events.ApplicationCommandInteractionCreate) error {
 	builder := discord.PollCreateBuilder{}
 	pool := builder.SetQuestion(question).
 		AddAnswer(movie1, createEmoji("1️⃣")).
-		AddAnswer(movie2, createEmoji("2️⃣")).SetDuration(1).SetAllowMultiselect(false).Build()
+		AddAnswer(movie2, createEmoji("2️⃣")).SetDuration(24).SetAllowMultiselect(false).Build()
 
 	event.Client().Rest().CreateMessage(event.Channel().ID(), discord.NewMessageCreateBuilder().SetContent(fmt.Sprint("Vote @everyone")).Build())
 
