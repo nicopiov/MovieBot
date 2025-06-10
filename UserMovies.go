@@ -23,18 +23,18 @@ func loadUserMovies(fileName string) (UserMovies, error) {
 
 	file, err := os.Open(fileName)
 	if err != nil {
-		return nil, fmt.Errorf("error opening file: %w", err)
+		return nil, fmt.Errorf("error opening usermovies file: %w", err)
 	}
 	defer file.Close()
 
 	dataFile, err := io.ReadAll(file)
 	if err != nil {
-		return nil, fmt.Errorf("error reading file: %w", err)
+		return nil, fmt.Errorf("error reading usermovies file: %w", err)
 	}
 
 	var userMovies UserMovies
 	if err := json.Unmarshal(dataFile, &userMovies); err != nil {
-		return nil, fmt.Errorf("error unmarshalling file: %w", err)
+		return nil, fmt.Errorf("error unmarshalling usermovies file: %w", err)
 	}
 	return userMovies, nil
 }
@@ -42,10 +42,10 @@ func loadUserMovies(fileName string) (UserMovies, error) {
 func saveUserMovies(fileName string, userMovies UserMovies) error {
 	data, err := json.MarshalIndent(userMovies, "", " ")
 	if err != nil {
-		return fmt.Errorf("error marshalling file: %w", err)
+		return fmt.Errorf("error marshalling usermovies file: %w", err)
 	}
 	if err := os.WriteFile(fileName, data, 0644); err != nil {
-		return fmt.Errorf("error writing file: %w", err)
+		return fmt.Errorf("error writing usermovies file: %w", err)
 	}
 	return nil
 }
@@ -53,7 +53,7 @@ func saveUserMovies(fileName string, userMovies UserMovies) error {
 func removeMovieFromUser(userMovies UserMovies, userID string, movieToRemove string) error {
 	movies, exists := userMovies[userID]
 	if !exists {
-		return fmt.Errorf("user not found")
+		return fmt.Errorf("user not found in usermovies")
 	}
 
 	for i, movie := range movies {

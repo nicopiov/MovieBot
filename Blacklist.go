@@ -21,19 +21,19 @@ func loadBlacklist(filename string) (Blacklist, error) {
 		if os.IsNotExist(err) {
 			return Blacklist{}, nil
 		}
-		return nil, fmt.Errorf("error opening file: %w", err)
+		return nil, fmt.Errorf("error opening blacklist file: %w", err)
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return nil, fmt.Errorf("error reading file: %w", err)
+		return nil, fmt.Errorf("error reading blacklist file: %w", err)
 	}
 
 	var blacklist Blacklist
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &blacklist); err != nil {
-			return nil, fmt.Errorf("error unmarshalling file: %w", err)
+			return nil, fmt.Errorf("error unmarshalling blacklist file: %w", err)
 		}
 	}
 	return blacklist, nil

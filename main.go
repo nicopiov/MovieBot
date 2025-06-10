@@ -141,7 +141,7 @@ func pollListener(event *events.MessageCreate) {
 
 		userMovies, err := loadUserMovies("usermovies.json")
 		if err != nil {
-			event.Client().Logger().Error("Error:", slog.Any("err", err))
+			event.Client().Logger().Error(err.Error())
 			return
 		}
 
@@ -157,24 +157,24 @@ func pollListener(event *events.MessageCreate) {
 				if movie == winningMovie {
 					// Remove the movie
 					if err := removeMovieFromUser(userMovies, userID, winningMovie); err != nil {
-						event.Client().Logger().Error("Error removing movie:", slog.Any("err", err))
+						event.Client().Logger().Error(err.Error())
 						continue
 					}
 
 					blacklist, err := loadBlacklist("blacklist.json")
 					if err != nil {
-						event.Client().Logger().Error("Error loading blacklist:", slog.Any("err", err))
+						event.Client().Logger().Error(err.Error())
 						continue
 					}
 
 					blacklist = append(blacklist, winningMovie)
 					if err := saveBlacklist("blacklist.json", blacklist); err != nil {
-						event.Client().Logger().Error("Error saving blacklist:", slog.Any("err", err))
+						event.Client().Logger().Error(err.Error())
 						continue
 					}
 
 					if err := saveUserMovies("usermovies.json", userMovies); err != nil {
-						event.Client().Logger().Error("Error saving user movies:", slog.Any("err", err))
+						event.Client().Logger().Error(err.Error())
 						continue
 					}
 
