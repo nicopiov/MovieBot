@@ -30,7 +30,8 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		slog.Error("Error loading .env file")
 	}
-
+	
+	StartMonitoringServer(os.Getenv("PORT"))
 	slog.Info("starting moviebot...")
 	client, err := disgo.New(os.Getenv("TOKEN"),
 		bot.WithGatewayConfigOpts(gateway.WithIntents(gateway.IntentsAll)),
