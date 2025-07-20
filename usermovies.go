@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"math/rand"
 	"os"
@@ -16,25 +17,29 @@ type UserMovies map[string][]string
 func loadUserMovies(fileName string) (UserMovies, error) {
 	if _, err := os.Stat(fileName); os.IsNotExist(err) {
 		if _, err := os.Create(fileName); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error creating file: %v", err)
 		}
 		return make(UserMovies), nil
 	}
 
 	file, err := os.Open(fileName)
 	if err != nil {
-		return nil, fmt.Errorf("error opening usermovies file: %w", err)
+		return nil, fmt.Errorf("error opening file: %w", err)
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		if err := file.Close(); err != nil {
+			slog.Error("Error closing file: " + err.Error())
+		}
+	}(file)
 
 	dataFile, err := io.ReadAll(file)
 	if err != nil {
-		return nil, fmt.Errorf("error reading usermovies file: %w", err)
+		return nil, fmt.Errorf("error reading file: %w", err)
 	}
 
 	var userMovies UserMovies
 	if err := json.Unmarshal(dataFile, &userMovies); err != nil {
-		return nil, fmt.Errorf("error unmarshalling usermovies file: %w", err)
+		return nil, fmt.Errorf("error unmarshalling file: %w", err)
 	}
 	return userMovies, nil
 }
@@ -42,10 +47,10 @@ func loadUserMovies(fileName string) (UserMovies, error) {
 func saveUserMovies(fileName string, userMovies UserMovies) error {
 	data, err := json.MarshalIndent(userMovies, "", " ")
 	if err != nil {
-		return fmt.Errorf("error marshalling usermovies file: %w", err)
+		return fmt.Errorf("error marshalling data: %w", err)
 	}
 	if err := os.WriteFile(fileName, data, 0644); err != nil {
-		return fmt.Errorf("error writing usermovies file: %w", err)
+		return fmt.Errorf("error writing file: %w", err)
 	}
 	return nil
 }
@@ -53,7 +58,7 @@ func saveUserMovies(fileName string, userMovies UserMovies) error {
 func removeMovieFromUser(userMovies UserMovies, userID string, movieToRemove string) error {
 	movies, exists := userMovies[userID]
 	if !exists {
-		return fmt.Errorf("user not found in usermovies")
+		return fmt.Errorf("user not found")
 	}
 
 	for i, movie := range movies {
@@ -82,7 +87,6 @@ func extractPeople(userMovies UserMovies, r *rand.Rand) (string, string) {
 	keys = append(keys[:rn], keys[rn+1:]...)
 	rn = r.Intn(len(keys))
 	second := keys[rn]
-	keys = append(keys[:rn], keys[rn+1:]...)
 	return first, second
 }
 

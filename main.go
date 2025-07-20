@@ -8,95 +8,52 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
+	"github.com/disgoorg/disgo/handler"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/joho/godotenv"
-	"log"
 	"log/slog"
-	"math/rand"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
-	"time"
 )
 
-type function func(event *events.ApplicationCommandInteractionCreate) error
+const userMovieFile = "usermovies.json"
+const blacklistFile = "blacklist.json"
 
 var (
-	guildID = snowflake.MustParse("1151652511502057512")
-
-	commands = []discord.ApplicationCommandCreate{
-		discord.SlashCommandCreate{
-			Name:        "listmovie",
-			Description: "List all movies inserted for the weekly watchparty",
-		},
-		discord.SlashCommandCreate{
-			Name:        "addmovie",
-			Description: "Add a movie to the weekly watchparty",
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionString{
-					Name:        "movie",
-					Description: "The movie to add",
-					Required:    true,
-				},
-			},
-		},
-		discord.SlashCommandCreate{
-			Name:        "extractmovie",
-			Description: "Extract two movies from the list randomly and create a pool to decide what film to watch",
-		},
-		discord.SlashCommandCreate{
-			Name:        "closepoll",
-			Description: "Close the poll",
-		},
-		discord.SlashCommandCreate{
-			Name:        "setup",
-			Description: "Setup the bot",
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionChannel{
-					Name:        "channel",
-					Description: "The channel to setup the bot",
-					ChannelTypes: []discord.ChannelType{
-						discord.ChannelTypeGuildText,
-					},
-					Required: true,
-				},
-			},
-		},
-	}
-
-	funcCommands = map[string]function{
-		"listmovie":    listMovies,
-		"addmovie":     addMovie,
-		"extractmovie": extractMovie,
-		"setup":        setupBot,
-	}
-
+	guildID            = snowflake.MustParse("1151652511502057512")
 	isPollActive       bool
 	operatingChannelID snowflake.ID
 )
 
 func main() {
-	err := godotenv.Load()
+	if err := godotenv.Load(); err != nil {
+		slog.Error("Error loading .env file")
+	}
+
 	slog.Info("starting moviebot...")
 	client, err := disgo.New(os.Getenv("TOKEN"),
 		bot.WithGatewayConfigOpts(gateway.WithIntents(gateway.IntentsAll)),
 		bot.WithEventListenerFunc(commandListener),
 		bot.WithEventListenerFunc(pollListener),
 	)
+	h := handler.New()
+	h.Autocomplete("/deletemovie", handleDeleteMovieAutocomplete)
+	client.AddEventListeners(h)
+
 	if err != nil {
-		slog.Error("Error creating client: ", err)
+		slog.Error("Error creating client: " + err.Error())
 		return
 	}
 	defer client.Close(context.TODO())
 
 	if _, err := client.Rest().SetGuildCommands(client.ApplicationID(), guildID, commands); err != nil {
-		slog.Error("Error setting guild commands: ", err)
+		slog.Error("Error setting guild commands: " + err.Error())
 		return
 	}
 
 	if err = client.OpenGateway(context.TODO()); err != nil {
-		slog.Error("errors while connecting to gateway", slog.Any("err", err))
+		slog.Error("errors while connecting to gateway: " + err.Error())
 		return
 	}
 
@@ -108,11 +65,12 @@ func main() {
 
 func commandListener(event *events.ApplicationCommandInteractionCreate) {
 	data := event.SlashCommandInteractionData()
-	if funcCommmand, ok := funcCommands[data.CommandName()]; ok {
-		if err := funcCommmand(event); err != nil {
-			err := event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(err.Error()).Build())
+	if funcCommand, ok := funcCommands[data.CommandName()]; ok {
+		if err := funcCommand(event); err != nil {
+			slog.Error("error while executing " + data.CommandName() + ": " + err.Error())
+			err := event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("error executing command " + data.CommandName()).SetEphemeral(true).Build())
 			if err != nil {
-				event.Client().Logger().Error("Error sending response", slog.Any("err", err))
+				slog.Error("Error sending response: " + err.Error())
 				return
 			}
 		}
@@ -120,206 +78,79 @@ func commandListener(event *events.ApplicationCommandInteractionCreate) {
 }
 
 func pollListener(event *events.MessageCreate) {
-
 	if event.ChannelID == operatingChannelID && event.Message.Type == discord.MessageTypePollResult {
 		isPollActive = false
-
 		if event.Message.MessageReference == nil {
-			event.Client().Logger().Info("poll non rilevato nel riferimento al messaggio")
+			slog.Info("poll non rilevato nel riferimento al messaggio")
 			return
 		}
+
 		pollMessage, _ := event.Client().Rest().GetMessage(event.ChannelID, *event.Message.MessageReference.MessageID)
-		highestCount := 0
-		answerID := 0
+		answerID := winningAnswer(pollMessage)
+		winningMovie := getWinningMovie(pollMessage, answerID)
 
-		for _, answer := range pollMessage.Poll.Results.AnswerCounts {
-			if answer.Count > highestCount {
-				highestCount = answer.Count
-				answerID = answer.ID
-			}
-		}
-
-		userMovies, err := loadUserMovies("usermovies.json")
+		userMovies, err := loadUserMovies(userMovieFile)
 		if err != nil {
-			event.Client().Logger().Error(err.Error())
+			slog.Error("error in pollListener: " + err.Error())
 			return
 		}
+		winningUser := getWinningUser(userMovies, winningMovie)
 
-		var winningMovie string
-		for _, ans := range pollMessage.Poll.Answers {
-			if *ans.AnswerID == answerID {
-				winningMovie = *ans.PollMedia.Text
-				break
-			}
+		if err := updateBlacklist(blacklistFile, winningMovie); err != nil {
+			slog.Error("error in pollListener while executing updateBlacklist: " + err.Error())
+			return
 		}
-		for userID, movies := range userMovies {
-			for _, movie := range movies {
-				if movie == winningMovie {
-					// Remove the movie
-					if err := removeMovieFromUser(userMovies, userID, winningMovie); err != nil {
-						event.Client().Logger().Error(err.Error())
-						continue
-					}
-
-					blacklist, err := loadBlacklist("blacklist.json")
-					if err != nil {
-						event.Client().Logger().Error(err.Error())
-						continue
-					}
-
-					blacklist = append(blacklist, winningMovie)
-					if err := saveBlacklist("blacklist.json", blacklist); err != nil {
-						event.Client().Logger().Error(err.Error())
-						continue
-					}
-
-					if err := saveUserMovies("usermovies.json", userMovies); err != nil {
-						event.Client().Logger().Error(err.Error())
-						continue
-					}
-
-					_, err = event.Client().Rest().CreateMessage(event.ChannelID, discord.NewMessageCreateBuilder().
-						SetContent(fmt.Sprintf("Movie '%s' has been removed from %s's list and added to the blacklist", winningMovie, userID)).
-						Build())
-					if err != nil {
-						event.Client().Logger().Error("Error sending message:", slog.Any("err", err))
-					}
-					return
-				}
-			}
+		if err := removeMovieFromUser(userMovies, winningUser, winningMovie); err != nil {
+			slog.Error("error in pollListener while executing removeMovieFromUser: " + err.Error())
+			return
 		}
-
-		event.Client().Logger().Info("Winning movie not found in any user's list")
-	}
-}
-
-func extractMovie(event *events.ApplicationCommandInteractionCreate) error {
-	if event.Channel().ID() != operatingChannelID {
-		return event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("You can only run this command in the channel you setup the bot").SetEphemeral(true).Build())
-	}
-
-	if isPollActive {
-		return event.CreateMessage(discord.NewMessageCreateBuilder().
-			SetContent("❌ There's already an active poll! Please wait for it to finish.").
-			SetEphemeral(true).
+		if err := saveUserMovies(userMovieFile, userMovies); err != nil {
+			slog.Error("error in pollListener while executing saveUserMovies: " + err.Error())
+			return
+		}
+		_, err = event.Client().Rest().CreateMessage(event.ChannelID, discord.NewMessageCreateBuilder().
+			SetContent(fmt.Sprintf("Movie '%s' has been removed from %s's list and added to the blacklist", winningMovie, winningUser)).
 			Build())
+		slog.Info("Movie " + winningMovie + " has been removed from the list and added to the blacklist")
+		if err != nil {
+			slog.Error("Error sending message: " + err.Error())
+		}
+		return
 	}
-
-	userMovies, err := loadUserMovies("usermovies.json")
-	if err != nil {
-		return err
-	}
-
-	s := rand.NewSource(time.Now().Unix())
-	r := rand.New(s)
-	firstPerson, secondPerson := extractPeople(userMovies, r)
-	movie1, movie2 := extractPersonMovies(userMovies, firstPerson, secondPerson, r)
-	question := fmt.Sprint("Ecco i film estratti per domenica: \n")
-
-	builder := discord.PollCreateBuilder{}
-	pool := builder.SetQuestion(question).
-		AddAnswer(movie1, createEmoji("1️⃣")).
-		AddAnswer(movie2, createEmoji("2️⃣")).SetDuration(24).SetAllowMultiselect(false).Build()
-
-	event.Client().Rest().CreateMessage(event.Channel().ID(), discord.NewMessageCreateBuilder().SetContent(fmt.Sprint("Vote @everyone")).Build())
-
-	if err := event.CreateMessage(discord.NewMessageCreateBuilder().SetPoll(pool).Build()); err != nil {
-		log.Println("error creating poll:", err)
-		_ = event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("Failed to create poll: " + err.Error()).SetEphemeral(true).Build())
-	}
-
-	isPollActive = true
-
-	return nil
 }
 
-func addMovie(event *events.ApplicationCommandInteractionCreate) error {
-	if event.Channel().ID() != operatingChannelID {
-		return event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("You can only run this command in the channel you setup the bot").SetEphemeral(true).Build())
-	}
-
-	memberID := event.Member().String()
-	userMovies, err := loadUserMovies("usermovies.json")
-	if err != nil {
-		return err
-	}
-
-	optionValue, err := event.SlashCommandInteractionData().Options["movie"].Value.MarshalJSON()
-	if err != nil {
-		return fmt.Errorf("error marshalling option value: %w", err)
-	}
-
-	if _, ok := userMovies[memberID]; ok && len(userMovies[memberID]) == 2 {
-		if err := event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprint(memberID, " hai già inserito due film, non puoi inserirne altri")).Build()); err != nil {
-			event.Client().Logger().Error("Error sending response", slog.Any("err", err))
-			return err
+func getWinningMovie(pollMessage *discord.Message, answerID int) string {
+	var winningMovie string
+	for _, ans := range pollMessage.Poll.Answers {
+		if *ans.AnswerID == answerID {
+			winningMovie = *ans.PollMedia.Text
+			break
 		}
-		return nil
 	}
-
-	movie := string(optionValue)
-	if isMovieInUserMovies(userMovies, movie) {
-		if err := event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprint(memberID, " il film che hai scelto è già presente nella lista")).Build()); err != nil {
-			event.Client().Logger().Error("Error sending response", slog.Any("err", err))
-			return err
-		}
-		return nil
-	}
-
-	movies := append(userMovies[memberID], movie)
-	userMovies[memberID] = movies
-
-	if err := saveUserMovies("usermovies.json", userMovies); err != nil {
-		event.Client().Logger().Error("Error:", slog.Any("err", err))
-		return err
-	}
-
-	if err := event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprint("movie ", movie, " added by ", memberID)).Build()); err != nil {
-		event.Client().Logger().Error("Error sending response", slog.Any("err", err))
-		return err
-	}
-	return nil
+	return winningMovie
 }
 
-func listMovies(event *events.ApplicationCommandInteractionCreate) error {
-	if event.Channel().ID() != operatingChannelID {
-		return event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("You can only run this command in the channel you setup the bot").SetEphemeral(true).Build())
+func winningAnswer(pollMessage *discord.Message) int {
+	var answerID int
+	highestCount := 0
+	for _, answer := range pollMessage.Poll.Results.AnswerCounts {
+		if answer.Count > highestCount {
+			highestCount = answer.Count
+			answerID = answer.ID
+		}
 	}
+	return answerID
+}
 
-	userMovies, err := loadUserMovies("usermovies.json")
-	if err != nil {
-		return err
-	}
-
-	text := fmt.Sprint("Ecco i film proposti per domenica: \n")
-	for memberID, movies := range userMovies {
-		text += fmt.Sprint("- ", memberID, " ha proposto -> ")
+func getWinningUser(userMovies UserMovies, winningMovie string) string {
+	for userID, movies := range userMovies {
 		for _, movie := range movies {
-			text += fmt.Sprint(movie, " ")
+			if movie == winningMovie {
+				return userID
+			}
 		}
-		text += "\n"
 	}
-
-	if err := event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(text).Build()); err != nil {
-		event.Client().Logger().Error("Error sending response", slog.Any("err", err))
-	}
-	return nil
-}
-
-func setupBot(event *events.ApplicationCommandInteractionCreate) error {
-	if !event.Member().Permissions.Has(discord.PermissionAdministrator) {
-		return event.CreateMessage(discord.NewMessageCreateBuilder().SetContent("You don't have the required permissions to run this command").SetEphemeral(true).Build())
-	}
-
-	optionValue, err := event.SlashCommandInteractionData().Options["channel"].Value.MarshalJSON()
-	channel := strings.ReplaceAll(string(optionValue), "\"", "")
-	event.Client().Logger().Info("channel", slog.Any("channel", channel))
-	if err != nil {
-		return fmt.Errorf("error marshalling option value: %w", err)
-	}
-	channelID := snowflake.MustParse(channel)
-	operatingChannelID = channelID
-	return event.CreateMessage(discord.NewMessageCreateBuilder().SetContent(fmt.Sprint("Bot setup in <#", channelID.String(), "> rerun this command to modify the channel")).Build())
+	return ""
 }
 
 func createEmoji(name string) *discord.PartialEmoji {
@@ -327,4 +158,19 @@ func createEmoji(name string) *discord.PartialEmoji {
 		Name: &name,
 	}
 	return emoji
+}
+
+func handleDeleteMovieAutocomplete(e *handler.AutocompleteEvent) error {
+	usermovies, _ := loadUserMovies(userMovieFile)
+	userFilms := usermovies[e.Member().String()]
+
+	var choices []discord.AutocompleteChoice
+	for _, movie := range userFilms {
+		choices = append(choices, discord.AutocompleteChoiceString{
+			Name:  movie[1 : len(movie)-1],
+			Value: movie[1 : len(movie)-1],
+		})
+	}
+
+	return e.AutocompleteResult(choices)
 }
